@@ -50,6 +50,8 @@
 static void close_listener(struct ev_loop *, struct Listener *);
 static void accept_cb(struct ev_loop *, struct ev_io *, int);
 static void backoff_timer_cb(struct ev_loop *, struct ev_timer *, int);
+static struct Listener *listener_lookup(struct Listener_head *, const struct Address *);
+static int init_listener(struct Listener *, const struct Table_head *, struct ev_loop *);
 
 
 /*
@@ -57,14 +59,74 @@ static void backoff_timer_cb(struct ev_loop *, struct ev_timer *, int);
  */
 void
 init_listeners(struct Listener_head *listeners,
-        const struct Table_head *tables) {
+        const struct Table_head *tables, struct ev_loop *loop) {
     struct Listener *iter;
 
     SLIST_FOREACH(iter, listeners, entries) {
-        if (init_listener(iter, tables) < 0) {
+        if (init_listener(iter, tables, loop) < 0) {
             err("Failed to initialize listener");
             print_listener_config(stderr, iter);
             exit(1);
+        }
+    }
+}
+
+#ifndef SLIST_FOREACH_SAFE
+#define SLIST_FOREACH_SAFE(var, head, field, tvar)          \
+    for ((var) = SLIST_FIRST(head);                         \
+        (var) && ((tvar) = SLIST_NEXT(var, field), 1);      \
+        (var) = (tvar))
+#endif
+
+void
+listeners_reload(struct Listener_head *existing_listeners,
+        struct Listener_head *new_listeners,
+        const struct Table_head *tables, struct ev_loop *loop) {
+    struct Listener *iter, *temp;
+
+    /* Remove existing listeners removed in new configuration */
+    SLIST_FOREACH_SAFE(iter, existing_listeners, entries, temp) {
+        if (listener_lookup(new_listeners, iter->address) == NULL) {
+            SLIST_REMOVE(existing_listeners, iter, Listener, entries);
+            close_listener(loop, iter);
+            listener_ref_put(&iter);
+        }
+    }
+
+    SLIST_FOREACH_SAFE(iter, new_listeners, entries, temp) {
+        struct Listener *existing_listener =
+            listener_lookup(existing_listeners, iter->address);
+
+        if (existing_listener != NULL) {
+            // Update
+            free(existing_listener->fallback_address);
+            existing_listener->fallback_address = iter->fallback_address;
+            iter->fallback_address == NULL;
+
+            free(existing_listener->source_address);
+            existing_listener->source_address = iter->source_address;
+            iter->source_address == NULL;
+
+            existing_listener->protocol = iter->protocol;
+
+            free(existing_listener->table_name);
+            existing_listener->table_name = iter->table_name;
+            iter->table_name == NULL;
+
+            free(existing_listener->access_log);
+            existing_listener->access_log = iter->access_log;
+            iter->access_log == NULL;
+
+            existing_listener->log_bad_requests = iter->log_bad_requests;
+
+            existing_listener->table = table_lookup(tables, existing_listener->table_name);
+            init_table(existing_listener->table);
+            // TODO verify the table exists
+        } else {
+            // New
+            SLIST_REMOVE(new_listeners, iter, Listener, entries);
+            SLIST_INSERT_HEAD(existing_listeners, iter, entries);
+            init_listener(iter, tables, loop);
         }
     }
 }
@@ -259,11 +321,8 @@ valid_listener(const struct Listener *listener) {
     return 1;
 }
 
-int
-init_listener(struct Listener *listener, const struct Table_head *tables) {
-    int sockfd;
-    int on = 1;
-
+static int
+init_listener(struct Listener *listener, const struct Table_head *tables, struct ev_loop *loop) {
     listener->table = table_lookup(tables, listener->table_name);
     if (listener->table == NULL) {
         err("Table \"%s\" not defined", listener->table_name);
@@ -278,13 +337,14 @@ init_listener(struct Listener *listener, const struct Table_head *tables) {
         address_set_port(listener->fallback_address,
                 address_port(listener->address));
 
-    sockfd = socket(address_sa(listener->address)->sa_family, SOCK_STREAM, 0);
+    int sockfd = socket(address_sa(listener->address)->sa_family, SOCK_STREAM, 0);
     if (sockfd < 0) {
         err("socket failed: %s", strerror(errno));
         return -2;
     }
 
     /* set SO_REUSEADDR on server socket to facilitate restart */
+    int on = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 
     if (bind(sockfd, address_sa(listener->address),
@@ -309,9 +369,20 @@ init_listener(struct Listener *listener, const struct Table_head *tables) {
     ev_timer_init(&listener->backoff_timer, backoff_timer_cb, 0.0, 0.0);
     listener->backoff_timer.data = listener;
 
-    ev_io_start(EV_DEFAULT, &listener->watcher);
+    ev_io_start(loop, &listener->watcher);
 
     return sockfd;
+}
+
+static struct Listener *
+listener_lookup(struct Listener_head *listeners, const struct Address *address)  {
+    struct Listener *iter;
+
+    SLIST_FOREACH(iter, listeners, entries)
+        if (address_equal(iter->address, address))
+            return iter;
+
+    return NULL;
 }
 
 struct Address *

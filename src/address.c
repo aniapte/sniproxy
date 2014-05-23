@@ -200,6 +200,14 @@ address_len(const struct Address *addr) {
 }
 
 int
+address_equal(const struct Address *addr_1, const struct Address *addr_2) {
+    return addr_1 != NULL
+        && addr_2 != NULL
+        && addr_1->len == addr_2->len
+        && memcmp(addr_1, addr_2, address_len(addr_1)) == 0;
+}
+
+int
 address_is_hostname(const struct Address *addr) {
     return addr != NULL && addr->type == HOSTNAME;
 }
