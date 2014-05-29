@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <assert.h>
 #include <sys/queue.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -133,9 +134,7 @@ listeners_reload(struct Listener_head *existing_listeners,
 
 struct Listener *
 new_listener() {
-    struct Listener *listener;
-
-    listener = calloc(1, sizeof(struct Listener));
+    struct Listener *listener = calloc(1, sizeof(struct Listener));
     if (listener == NULL) {
         err("calloc");
         return NULL;
@@ -145,8 +144,12 @@ new_listener() {
     listener->fallback_address = NULL;
     listener->source_address = NULL;
     listener->protocol = tls_protocol;
+    listener->table_name = NULL;
     listener->access_log = NULL;
     listener->log_bad_requests = 0;
+    listener->reference_count = 0;
+    /* ev watchers initialised once socket is open in init_listener() */
+    listener->table = NULL;
 
     return listener;
 }
@@ -478,6 +481,21 @@ free_listeners(struct Listener_head *listeners) {
 
     while ((iter = SLIST_FIRST(listeners)) != NULL)
         remove_listener(listeners, iter);
+}
+
+void
+listener_ref_put(struct Listener **listener) {
+    assert((*listener)->reference_count > 0);
+    (*listener)->reference_count--;
+    if ((*listener)->reference_count == 0)
+        free_listener(*listener);
+    *listener = NULL;
+}
+
+struct Listener *
+listener_ref_get(struct Listener *listener) {
+    listener->reference_count++;
+    return listener;
 }
 
 static void
