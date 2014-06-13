@@ -65,7 +65,7 @@ run_server() {
     resolv_init(EV_DEFAULT);
     init_connections();
 
-    ev_run(EV_DEFAULT, 0);
+    ev_loop(EV_DEFAULT, 0);
 
     free_connections(EV_DEFAULT);
     resolv_shutdown(EV_DEFAULT);
