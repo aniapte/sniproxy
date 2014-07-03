@@ -38,6 +38,7 @@ struct Listener {
     struct Address *address, *fallback_address, *source_address;
     const struct Protocol *protocol;
     char *table_name;
+    char *hostname_substr; /* A substring in hostname to be altered */
     struct Logger *access_log;
     int log_bad_requests;
 
@@ -52,6 +53,7 @@ struct Listener {
 struct Listener *new_listener();
 int accept_listener_arg(struct Listener *, char *);
 int accept_listener_table_name(struct Listener *, char *);
+int accept_listener_hostname_alter(struct Listener *, char *);
 int accept_listener_fallback_address(struct Listener *, char *);
 int accept_listener_source_address(struct Listener *, char *);
 int accept_listener_protocol(struct Listener *, char *);

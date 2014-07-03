@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <alloca.h>
 #include <sys/queue.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -114,6 +115,16 @@ accept_listener_arg(struct Listener *listener, char *arg) {
     } else {
         err("Invalid listener argument %s", arg);
     }
+
+    return 1;
+}
+
+int
+accept_listener_hostname_alter(struct Listener *listener, char *arg) {
+    if (listener->hostname_substr == NULL)
+        listener->hostname_substr = strdup(arg);
+    else        
+        err("Invalid listener argument %s", arg);
 
     return 1;
 }
@@ -314,6 +325,51 @@ init_listener(struct Listener *listener, const struct Table_head *tables) {
     return sockfd;
 }
 
+
+/** http://creativeandcritical.net/str-replace-c/
+
+    Description: Replaces in the string str all the occurrences of the source string
+    old with the destination string new. The lengths of the strings old and new may differ.
+    The string new may be of any length, but the string "old" must be of non-zero length
+    - the penalty for providing an empty string for the "old" parameter is an infinite loop.
+    In addition, none of the three parameters may be NULL.
+
+    Returns: The post-replacement string, or NULL if memory for the new string could
+    not be allocated. Does not modify the original string. The memory for the returned 
+    post-replacement string may be deallocated with the standard library function free() 
+    when it is no longer required.
+**/
+char *replace_str(const char *str, const char *old, const char *new)
+{
+    char *ret, *r;
+    const char *p, *q;
+    size_t oldlen = strlen(old);
+    size_t count, retlen, newlen = strlen(new);
+
+    if (oldlen != newlen) {
+        for (count = 0, p = str; (q = strstr(p, old)) != NULL; p = q + oldlen)
+            count++;
+        /* this is undefined if p - str > PTRDIFF_MAX */
+        retlen = p - str + strlen(p) + count * (newlen - oldlen);
+    } else
+        retlen = strlen(str);
+
+    if ((ret = malloc(retlen + 1)) == NULL)
+        return NULL;
+
+    for (r = ret, p = str; (q = strstr(p, old)) != NULL; p = q + oldlen) {
+        /* this is undefined if q - p > PTRDIFF_MAX */
+        ptrdiff_t l = q - p;
+        memcpy(r, p, l);
+        r += l;
+        memcpy(r, new, newlen);
+        r += newlen;
+    }
+    strcpy(r, p);
+
+    return ret;
+}
+
 struct Address *
 listener_lookup_server_address(const struct Listener *listener,
         const char *name, size_t name_len) {
@@ -330,13 +386,22 @@ listener_lookup_server_address(const struct Listener *listener,
     int port = address_port(addr);
 
     if (address_is_wildcard(addr)) {
-        new_addr = new_address(name);
+        /* If dest address is a wildcard and if listener has hostname_alter set,
+           delete the substring in hostname */
+        if (name && listener->hostname_substr && strlen(listener->hostname_substr)) {
+            char *temp = replace_str(name, listener->hostname_substr, "");
+            new_addr = new_address(temp);
+            info("Hostname replaced, old:%s, new:%s", name, temp);
+            free(temp);
+        }
+        else
+            new_addr = new_address(name);
+
         if (new_addr == NULL) {
             warn("Invalid hostname %.*s", (int)name_len, name);
 
             return listener->fallback_address;
         }
-
         if (port != 0)
             address_set_port(new_addr, port);
     } else {
@@ -379,6 +444,9 @@ print_listener_config(FILE *file, const struct Listener *listener) {
                 display_address(listener->source_address,
                     address, sizeof(address)));
 
+    if (listener->hostname_substr)
+        fprintf(file, "\thostname_alter %s\n", listener->hostname_substr);
+
     fprintf(file, "}\n\n");
 }
 
@@ -397,6 +465,7 @@ free_listener(struct Listener *listener) {
     free(listener->fallback_address);
     free(listener->source_address);
     free(listener->table_name);
+    free(listener->hostname_substr);
     free_logger(listener->access_log);
     free(listener);
 }
