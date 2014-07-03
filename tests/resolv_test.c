@@ -30,7 +30,7 @@ test_init_cb(struct ev_loop *loop __attribute__((unused)), struct ev_timer *w __
 static void
 timeout_cb(struct ev_loop *loop, struct ev_timer *w __attribute__((unused)), int revents) {
     if (revents & EV_TIMER)
-        ev_break(loop, EVBREAK_ALL);
+        ev_unloop(loop, EVUNLOOP_ALL);
 }
 
 
@@ -46,7 +46,7 @@ int main() {
     ev_timer_init(&timeout_watcher, &timeout_cb, 5.0, 0.0);
     ev_timer_start(loop, &timeout_watcher);
 
-    ev_run(loop, 0);
+    ev_loop(loop, 0);
 
     resolv_shutdown(loop);
 
